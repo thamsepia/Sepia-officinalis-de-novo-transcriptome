@@ -1,0 +1,43 @@
+#BLAST reults filtering
+sort -k1,1 -k12,12gr -k11,11g -k3,3gr blastresults.out | sort -u -k1,1 --merge > blast_tophit.out
+
+#Remove redundant transcripts based on bitscore
+sort -nrk12 blast_tophit.out | awk 's[$2] && s[$2]!=$12{next}{s[$2]=$12}1'|sort -k1 > nr_blasthits.out
+
+#Remove redundant transcripts with same bitscore based on e-value
+sort -nrk11 nr_blasthits.out | awk 's[$2] && s[$2]!=$11{next}{s[$2]=$11}1'|sort -k1>nrblast_final.out
+
+#Seurat output processing
+sed 's/,/\t/g' sepia_OL.markers_top25.csv| sed 's/"//g'>sepia_OL.markers_top25_tmp1
+
+#match blast top hits with Seurat markers
+join -a1 -1 8 -2 1 <(sort -k8,8 sepia_OL.markers_top25_tmp1) <(sort -k1,1 nrblast_final.out)|awk 'BEGIN {OFS=" ";} {tmp=$1;$1=$2;$2=$3;$3=$4;$4=$5;$5=$6;$6=$7;$7=$8;$8=tmp;print $0;}'| sort -k1n|awk '{$11=$12=$13=$14=$15=$16=$17=$20=""; print $0}'|sed 's/ \+ / /g'|sed 's/ /\t/g'|sed 's/\t/ /13g' 
+
+#extract sequences using set of transcript IDs
+cut -c 1- selected_IDS.txt | xargs -n 1 samtools faidx all_transcripts.fa >selected.fa
+
+#BLASTx
+$PATH_BLAST/blastx -query $INPUT_FILE -db $DATABASE/db -taxidlist $TAXID -out $OUTPATH/blastx.out -outfmt "6 qseqid sseqid pident length mismatch gapopen qstart qend sstart send evalue bitscore stitle" -max_target_seqs 1 -num_threads 32
+
+#BUSCO
+$PATH_BUSCO/busco -f -m transcriptome -i $INPUT_FILE -o SEPO_BUSCO -l mollusca --out_path $OUT_PATH --download_path $DOWNLOAD_PATH 
+
+#rnaQUAST
+python $PATH_RNAQUAST/rnaQUAST.py --transcripts $INPUT_FILE --busco PATH_BUSCO/busco  --blat --gene_mark --output_dir $OUT_PATH --threads 8
+
+#Transdecoder
+$PATH_TRANS/TransDecoder.LongOrfs -t $INPUT_FILE 
+
+#Pfam
+$PATH_HMMSEARCH/hmmsearch --cpu 32 --domtblout pfam.domtblout $PFAMPATH/Pfam-A.hmm $INPUTPATH/sequences.pep
+
+#InterProScan
+$PATH_INTERPRO/interproscan.sh -f tsv,xml,gff3 -goterms -i $INPUTPATH/sequences.pep -iprlookup -pa -t p -d $OUTDIRECTORYPATH -cpu 32
+
+#Bowtie2build
+$PATHBOWTIE/bowtie2-build $INPUTPATH/inputfile.fa
+
+#bowtie2 align
+$PATHBOWTIE/bowtie2 -x $INPUTPATH/inputfile.fa -U $READSPATH/scrna.fastq --very-fast-local --threads 32 | samtools view -bu - | samtools sort -@ 16 -o $PATH_BAMS/input_vs_scrna.bam 
+
+
